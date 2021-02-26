@@ -2,26 +2,23 @@
 
 use PDO;
 
-class ORMFactory
+abstract class ORMFactory
 {
-    /** @var Connection */
-    protected $database;
-
     /** @var ORM[] */
     protected $tables;
 
-    public function __construct(array $access)
+    public function __construct(Connection $connection)
     {
-        $this->database = new Connection($access);
+        $rs = $connection->connection()->query("show tables");
+
+        while($table = $rs->fetch(PDO::FETCH_COLUMN))
+        {
+            $this->tables[$table] = new ORM($table, $connection);
+        }
     }
 
-    public function database(): Connection
+    public function table(string $name): ORM
     {
-        return $this->database;
-    }
-
-    public function __set($name, ORM $orm)
-    {
-        $this->tables[$name] = $orm;
+        return $this->tables[$name];
     }
 }
