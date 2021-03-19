@@ -1,20 +1,19 @@
 <?php namespace Molecule;
 
 use Helpers\Corrector;
+use LogicException;
+use PDO;
 use PDOStatement;
+use ValueError;
 
 class ORM
 {
     protected $table;
 
-    protected $dependencies;
-    protected $references;
-    protected $conditions;
-    protected $fields;
-    protected $where;
-    protected $order;
-    protected $binds;
+    private $receipt;
+    private $fields;
 
+    protected $conditions;
     protected $chains;
     protected $mark;
 
@@ -23,19 +22,13 @@ class ORM
 
     const mark_of_parameter = ':';
 
+
     public function __construct($table, Connection $DB)
     {
         $this->table = $table;
-        $this->DB = $DB;
-
-        $this->abort();
-    }
-
-    public function abort()
-    {
-        $this->dependencies = $this->where = $this->order = $this->binds = [];
-        $this->references = [$this->table];
+        $this->chains = ['references' => [$table]];
         $this->mark = 'a';
+        $this->DB = $DB;
     }
 
     protected function crypt($field, $node, $multi = false, $spec = false): string
@@ -77,11 +70,11 @@ class ORM
     {
         switch(gettype($value))
         {
-            case 'NULL': return $this->bind($name, null, \PDO::PARAM_NULL);
-            case 'integer': return $this->bind($name, $value, \PDO::PARAM_INT);
+            case 'NULL': return $this->bind($name, null, PDO::PARAM_NULL);
+            case 'integer': return $this->bind($name, $value, PDO::PARAM_INT);
         }
 
-        return $this->bind($name, $value, \PDO::PARAM_STR);
+        return $this->bind($name, $value, PDO::PARAM_STR);
     }
 
     public function conditions(array $fields, $multi = false, $spec = false): string
@@ -98,17 +91,17 @@ class ORM
 
     public function bind($name, ...$binds): self
     {
-        if(array_key_exists($name, $this->binds))
+        if(array_key_exists($name, $this->chains['binds']))
         {
-            throw new \LogicException("Duplicate bind parameters. Argument: $name", 500);
+            throw new LogicException("Duplicate bind parameters. Argument: $name", 500);
         }
 
-        $this->binds[$name] = $binds;
+        $this->chains['binds'][$name] = $binds;
 
         return $this;
     }
 
-    public function dependence($table, $type, array $reference = []): self
+    public function dependence(string $table, string $type, array $reference = []): self
     {
         $references = [];
 
@@ -117,9 +110,8 @@ class ORM
             $references[] = implode('', [$p, $c]);
         }
 
-        $this->dependencies[$table] = implode(' ', [$type, 'JOIN', $table, 'ON', implode(' AND ', $references)]);
-
-        $this->references[] = $table;
+        $this->chains['dependencies'][$table] = implode(' ', [$type, 'JOIN', $table, 'ON', implode(' AND ', $references)]);
+        $this->chains['references'][] = $table;
 
         return $this;
     }
@@ -144,15 +136,29 @@ class ORM
 
         if(!empty($where))
         {
-            $this->where[] = Corrector::RoundFraming(implode(' OR ', $where));
+            $this->chains['where'][] = Corrector::RoundFraming(implode(' OR ', $where));
         }
+
+        return $this;
+    }
+
+    public function group(array $fields): self
+    {
+        $this->chains['group'] = $fields;
 
         return $this;
     }
 
     public function limit(int $limit): self
     {
-        $this->limit = $limit;
+        $this->chains['limit'] = $limit;
+
+        return $this;
+    }
+
+    public function offset(int $offset): self
+    {
+        $this->chains['offset'] = $offset;
 
         return $this;
     }
@@ -167,7 +173,7 @@ class ORM
                 $condition = 'ASC';
             }
 
-            $this->order[] = implode(' ', [$field, $condition]);
+            $this->chains['order'][] = implode(' ', [$field, $condition]);
         }
 
         return $this;
@@ -175,28 +181,40 @@ class ORM
 
     protected function setAdditional()
     {
-        if(!empty($this->where))
+        if(!empty($this->chains['where']))
         {
-            $this->chains[] = 'WHERE';
-            $this->chains[] = implode(' AND ', $this->where);
+            $this->receipt[] = 'WHERE';
+            $this->receipt[] = implode(' AND ', $this->chains['where']);
         }
 
-        if(!empty($this->order))
+        if(!empty($this->chains['group']))
         {
-            $this->chains[] = 'ORDER BY';
-            $this->chains[] = implode(', ', $this->order);
+            $this->receipt[] = 'GROUP BY';
+            $this->receipt[] = implode(', ', $this->chains['group']);
         }
 
-        if(!empty($this->limit))
+        if(!empty($this->chains['order']))
         {
-            $this->chains[] = 'LIMIT';
-            $this->chains[] = $this->limit;
+            $this->receipt[] = 'ORDER BY';
+            $this->receipt[] = implode(', ', $this->chains['order']);
+        }
+
+        if(!empty($this->chains['limit']))
+        {
+            $this->receipt[] = 'LIMIT';
+            $this->receipt[] = $this->chains['limit'];
+        }
+
+        if(!empty($this->chains['offset']))
+        {
+            $this->receipt[] = 'OFFSET';
+            $this->receipt[] = $this->chains['offset'];
         }
     }
 
     public function onDuplicate($param = false): self
     {
-        if(empty($this->chains) || empty($this->fields))
+        if(empty($this->receipt) || empty($this->fields))
         {
             return $this;
         }
@@ -215,8 +233,8 @@ class ORM
                 break;
         }
 
-        $this->chains[] = 'ON DUPLICATE KEY UPDATE';
-        $this->chains[] = urldecode(http_build_query($fields, false, ', '));
+        $this->receipt[] = 'ON DUPLICATE KEY UPDATE';
+        $this->receipt[] = urldecode(http_build_query($fields, false, ', '));
 
         $this->fields = null;
 
@@ -225,11 +243,11 @@ class ORM
 
     public function select(array $fields = ['*']): self
     {
-        $this->chains = ['SELECT', implode(', ', $fields), 'FROM', $this->table];
+        $this->receipt = ['SELECT', implode(', ', $fields), 'FROM', $this->table];
 
-        if(!empty($this->dependencies))
+        if(!empty($this->chains['dependencies']))
         {
-            $this->chains[] = implode(' ', $this->dependencies);
+            $this->receipt[] = implode(' ', $this->chains['dependencies']);
         }
 
         $this->setAdditional();
@@ -239,15 +257,15 @@ class ORM
 
     public function update(array $update): self
     {
-        $this->chains = ['UPDATE', $this->table];
+        $this->receipt = ['UPDATE', $this->table];
 
-        if(!empty($this->dependencies))
+        if(!empty($this->chains['dependencies']))
         {
-            $this->chains[] = implode(' ', $this->dependencies);
+            $this->receipt[] = implode(' ', $this->chains['dependencies']);
         }
 
-        $this->chains[] = 'SET';
-        $this->chains[] = $this->conditions($update, false, '=');
+        $this->receipt[] = 'SET';
+        $this->receipt[] = $this->conditions($update, false, '=');
 
         $this->setAdditional();
 
@@ -258,12 +276,12 @@ class ORM
     {
         $this->fields = $fields ?? array_keys($insert);
 
-        $this->chains = ['INSERT INTO', $this->table, Corrector::RoundFraming(implode(',', $this->fields))];
+        $this->receipt = ['INSERT INTO', $this->table, Corrector::RoundFraming(implode(',', $this->fields))];
 
         $insert = !empty($fields) ? implode(',', $insert) : Corrector::RoundFraming($this->conditions($insert, true));
 
-        $this->chains[] = 'VALUES';
-        $this->chains[] = $insert;
+        $this->receipt[] = 'VALUES';
+        $this->receipt[] = $insert;
 
         return $this;
     }
@@ -275,11 +293,11 @@ class ORM
 
     public function delete(array $fields = []): self
     {
-        $this->chains = ['DELETE', implode(',', $fields), 'FROM', $this->table];
+        $this->receipt = ['DELETE', implode(',', $fields), 'FROM', $this->table];
 
         if(!empty($this->dependencies))
         {
-            $this->chains[] = implode(' ', $this->dependencies);
+            $this->receipt[] = implode(' ', $this->dependencies);
         }
 
         $this->setAdditional();
@@ -291,28 +309,29 @@ class ORM
     {
         return preg_replace_callback('/(\d):/', function($matches)
         {
-            if(!array_key_exists($matches[1], $this->references))
+            if(!array_key_exists($matches[1], $this->chains['references']))
             {
-                throw new \ValueError("Reference {$matches[1]}: does not exist", 501);
+                throw new ValueError("Reference {$matches[1]}: does not exist", 501);
             }
 
-            return $this->references[$matches[1]].'.';
+            return $this->chains['references'][$matches[1]].'.';
 
-        }, implode(' ', $this->chains));
+        }, implode(' ', $this->receipt));
     }
 
     public function exec(): PDOStatement
     {
         $stmt = $this->DB->connection()->prepare($this->unifier());
 
-        foreach($this->binds as $value => $bind)
+        foreach($this->chains['binds'] as $value => $bind)
         {
             $stmt->bindValue($value, ...$bind);
         }
 
         $stmt->execute();
 
-        $this->abort();
+        $this->chains = ['references' => [$this->table]];
+        $this->mark = 'a';
 
         return $stmt;
     }
