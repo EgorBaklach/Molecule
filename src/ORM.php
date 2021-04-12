@@ -22,7 +22,6 @@ class ORM
 
     const mark_of_parameter = ':';
 
-
     public function __construct($table, Connection $DB)
     {
         $this->table = $table;
@@ -321,7 +320,7 @@ class ORM
 
     public function exec(): PDOStatement
     {
-        $stmt = $this->DB->connection()->prepare($this->unifier());
+        $stmt = $this->connection()->prepare($this->unifier());
 
         foreach($this->chains['binds'] as $value => $bind)
         {
@@ -339,6 +338,11 @@ class ORM
     public function getSql(): string
     {
         return $this->unifier();
+    }
+
+    public function connection(): PDO
+    {
+        return $this->DB->connection();
     }
 
     public function disconnect()
