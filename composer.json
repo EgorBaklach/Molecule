@@ -1,0 +1,21 @@
+{
+  "name": "egorbaklach/molecule",
+  "type": "library",
+  "description": "Molecule",
+  "license": "MIT",
+  "require": {
+    "php": "^7.3",
+    "egorbaklach/helpers": "1.5",
+    "ext-pdo": "*"
+  },
+  "autoload": {
+    "psr-4": {
+      "Molecule\\": "src"
+    }
+  },
+  "config": {
+    "sort-packages": true,
+    "optimize-autoloader": true
+  },
+  "minimum-stability": "stable"
+}
